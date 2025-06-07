@@ -7,13 +7,7 @@ const errorContainer = document.getElementById('error-container');
 fetchButton.addEventListener('click', async () => {
     const url = urlInput.value.trim();
     if (!url) {
-        showError('Please enter a project URL or ID.');
-        return;
-    }
-
-    const projectId = extractProjectId(url);
-    if (!projectId) {
-        showError('Invalid project URL or ID. Expected format: https://websim.com/p/PROJECT_ID or just the PROJECT_ID.');
+        showError('Please enter a project URL, ID, or slug.');
         return;
     }
 
@@ -21,6 +15,13 @@ fetchButton.addEventListener('click', async () => {
     loader.style.display = 'block';
 
     try {
+        const projectId = await resolveProjectId(url);
+        if (!projectId) {
+            showError('Invalid input. Please use a project ID, a project URL (e.g., /p/...), or a user slug (e.g., @username/project-slug).');
+            loader.style.display = 'none';
+            return;
+        }
+
         const history = await fetchAllRevisions(projectId);
         renderHistory(history);
     } catch (err) {
@@ -48,6 +49,45 @@ function extractProjectId(input) {
 
     if (input.length === 20 && /^[a-z0-9_-]+$/.test(input)) {
         return input;
+    }
+
+    return null;
+}
+
+async function resolveProjectId(input) {
+    input = input.trim();
+
+    // 1. Project ID
+    if (input.length === 20 && /^[a-z0-9_-]+$/.test(input)) {
+        return input;
+    }
+
+    // 2. Project URL: /p/PROJECT_ID
+    let match = input.match(/\/p\/([a-z0-9_-]{20})/);
+    if (match) {
+        return match[1];
+    }
+
+    // 3. Slug URL: /@username/slug or @username/slug
+    match = input.match(/@([a-zA-Z0-9_]{3,32})\/([a-zA-Z0-9-]{3,50})/);
+    if (match) {
+        const username = match[1];
+        const slug = match[2];
+        const apiUrl = `/api/v1/users/${username}/slugs/${slug}`;
+        const response = await fetch(apiUrl);
+
+        if (!response.ok) {
+            if (response.status === 404) {
+                throw new Error(`Project not found for user @${username} with slug "${slug}".`);
+            }
+            throw new Error(`Failed to fetch project by slug. Status: ${response.status}`);
+        }
+        const data = await response.json();
+        if (data && data.project && data.project.id) {
+            return data.project.id;
+        } else {
+            throw new Error('Could not get project ID from slug response.');
+        }
     }
 
     return null;
@@ -129,4 +169,3 @@ function clearUI() {
     errorContainer.textContent = '';
     errorContainer.style.display = 'none';
 }
-
