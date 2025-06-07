@@ -22,8 +22,18 @@ fetchButton.addEventListener('click', async () => {
             return;
         }
 
+        const project = await getProject(projectId);
         const history = await fetchAllRevisions(projectId);
-        renderHistory(history);
+
+        let parentHistory = null;
+        let parentProject = null;
+        if (project && project.parent_id) {
+            parentProject = await getProject(project.parent_id);
+            parentHistory = await fetchAllRevisions(project.parent_id);
+        }
+
+        renderHistory(history, parentHistory, parentProject, project);
+
     } catch (err) {
         showError(err.message);
     } finally {
@@ -37,22 +47,6 @@ urlInput.addEventListener('keydown', (event) => {
     }
 });
 
-
-function extractProjectId(input) {
-    const urlParts = input.split('/p/');
-    if (urlParts.length > 1) {
-        const potentialId = urlParts[1].split('/')[0];
-        if (potentialId.length === 20 && /^[a-z0-9_-]+$/.test(potentialId)) {
-            return potentialId;
-        }
-    }
-
-    if (input.length === 20 && /^[a-z0-9_-]+$/.test(input)) {
-        return input;
-    }
-
-    return null;
-}
 
 async function resolveProjectId(input) {
     input = input.trim();
@@ -93,6 +87,18 @@ async function resolveProjectId(input) {
     return null;
 }
 
+async function getProject(projectId) {
+    const response = await fetch(`/api/v1/projects/${projectId}`);
+    if (!response.ok) {
+        if (response.status === 404) {
+            throw new Error(`Project with ID ${projectId} not found.`);
+        }
+        throw new Error(`Failed to fetch project data. Status: ${response.status}`);
+    }
+    const data = await response.json();
+    return data.project;
+}
+
 async function fetchAllRevisions(projectId) {
     let allRevisions = [];
     let cursor = null;
@@ -124,15 +130,17 @@ async function fetchAllRevisions(projectId) {
     return allRevisions;
 }
 
-function renderHistory(revisions) {
+function renderRevisionList(revisions, container) {
     const validRevisions = revisions.filter(item => item.site && item.site.prompt && item.site.prompt.text);
 
     if (validRevisions.length === 0) {
-        historyContainer.innerHTML = '<p>No prompt history found for this project.</p>';
+        const p = document.createElement('p');
+        p.textContent = 'No prompt history found for this project.';
+        container.appendChild(p);
         return;
     }
 
-    validRevisions.reverse();
+    validRevisions.sort((a, b) => a.project_revision.version - b.project_revision.version);
 
     const fragment = document.createDocumentFragment();
     validRevisions.forEach(item => {
@@ -149,14 +157,50 @@ function renderHistory(revisions) {
         const promptText = document.createElement('p');
         promptText.className = 'prompt-text';
         promptText.textContent = prompt.text;
-        
+
         revisionElement.appendChild(header);
         revisionElement.appendChild(promptText);
 
         fragment.appendChild(revisionElement);
     });
-    
-    historyContainer.appendChild(fragment);
+
+    container.appendChild(fragment);
+}
+
+function renderHistory(revisions, parentRevisions, parentProject, project) {
+    historyContainer.innerHTML = '';
+
+    const hasHistory = revisions.some(item => item.site && item.site.prompt && item.site.prompt.text);
+    const hasParentHistory = parentRevisions && parentRevisions.some(item => item.site && item.site.prompt && item.site.prompt.text);
+
+    if (!hasHistory && !hasParentHistory) {
+        historyContainer.innerHTML = '<p>No prompt history found for this project or its parent.</p>';
+        return;
+    }
+
+    if (parentRevisions && parentProject) {
+        const parentHeader = document.createElement('h2');
+        const parentLink = document.createElement('a');
+        parentLink.href = `/p/${parentProject.id}`;
+        parentLink.target = '_blank';
+        parentLink.textContent = parentProject.title || `Project ${parentProject.id}`;
+
+        parentHeader.textContent = `Parent Project History: `;
+        parentHeader.appendChild(parentLink);
+        historyContainer.appendChild(parentHeader);
+
+        renderRevisionList(parentRevisions, historyContainer);
+    }
+
+    const projectHeader = document.createElement('h2');
+    let projectTitleText = `History for ${project.title || `Project ${project.id}`}`;
+    if (project.parent_id) {
+        projectTitleText += ' (Fork)';
+    }
+    projectHeader.textContent = projectTitleText;
+    historyContainer.appendChild(projectHeader);
+
+    renderRevisionList(revisions, historyContainer);
 }
 
 function showError(message) {
